@@ -14,7 +14,8 @@ install_pkg <- function(x)
 
 # Install libraries ----------------------------------------------
 # Installation of exifr requires portable perl to be stored at the following location on computer: C:\Strawberry!!!
-install_pkg("RPostgreSQL")
+install_pkg("RPostgres")
+install_pkg("DBI")
 install_pkg("exifr")
 install_pkg("dplyr")
 install_pkg("lubridate")
@@ -23,16 +24,16 @@ install_pkg("lubridate")
 
 # Run code -------------------------------------------------------
 # Set initial working directory -------------------------------------------------------
-wd <- "//nmfs/akc-nmml/Polar_Imagery/Surveys_HS/Coastal/"
-year <- as.list(2020:2020)
+wd <- "S:/survey_harbor_seals_coastal/"
+year <- as.list(2026:2026)
 
 # Create list of folders within directory for which images need to be processed -------
-dir <- as.character(list.dirs(paste(wd, "Originals/", year[1], sep = ""), full.names = TRUE, recursive = TRUE))
+dir <- as.character(list.dirs(paste(wd, year[1], sep = "/"), full.names = TRUE, recursive = TRUE))
 original <- data.frame(path = dir[grep("[A-Z]$", dir)], stringsAsFactors = FALSE)
 if(length(year) > 1) {
   for (i in 2:length(year)){
     yr <- year[i]
-    dir <- as.character(list.dirs(paste(wd, "Originals/", yr, sep = ""), full.names = TRUE, recursive = TRUE))
+    dir <- as.character(list.dirs(paste(wd, yr, sep = "/"), full.names = TRUE, recursive = TRUE))
   
     original_temp <- data.frame(path = dir, stringsAsFactors = FALSE)
     original <- rbind(original, original_temp)
@@ -41,19 +42,21 @@ if(length(year) > 1) {
 }
 
 # Remove extraneous folders that do not need to have images imported into DB
-original1 <- data.frame(path = original[grep("Originals/[0-9][0-9][0-9][0-9]/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/[A-Z][A-Z][A-Z]$", original$path), ], stringsAsFactors = FALSE)
-original2 <- data.frame(path = original[grep("Originals/[0-9][0-9][0-9][0-9]/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/[A-Z][A-Z][A-Z]/[A-Z][A-Z][A-Z]_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][a-z]$", original$path), ], stringsAsFactors = FALSE)
+original1 <- data.frame(path = original[grep("[0-9][0-9][0-9][0-9]/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/[A-Z][A-Z][A-Z]$", original$path), ], stringsAsFactors = FALSE)
+original2 <- data.frame(path = original[grep("[0-9][0-9][0-9][0-9]/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/[A-Z][A-Z][A-Z]/[A-Z][A-Z][A-Z]_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][a-z]$", original$path), ], stringsAsFactors = FALSE)
 original <- rbind(original1, original2) 
 rm(original1, original2)
                  
 # Remove folders that have previously been processed
-con <- RPostgreSQL::dbConnect(PostgreSQL(), 
-                              dbname = Sys.getenv("pep_db"), 
-                              host = Sys.getenv("pep_ip"), 
-                              user = Sys.getenv("pep_admin"), 
-                              password = Sys.getenv("admin_pw"))
-imported <- dbGetQuery(con, "SELECT source_file, image_name FROM surv_pv_cst.tbl_image_exif")
-RPostgreSQL::dbDisconnect(con)
+con <- DBI::dbConnect(
+  RPostgres::Postgres(),
+  dbname = Sys.getenv("mml_pep_db"),
+  host = Sys.getenv("mml_pep_ip"),
+  user = Sys.getenv("mml_pep_user"),
+  password = Sys.getenv("mml_pep_user_pw")
+)
+imported <- RPostgres::dbGetQuery(con, "SELECT source_file, image_name FROM surv_pv_cst.tbl_image_exif")
+RPostgres::dbDisconnect(con)
 imported$path <- dirname(imported$source_file)
 imported <- unique(imported$path)
 imported <- gsub("\\\\", "/", imported)
@@ -68,7 +71,7 @@ tags <- c("SourceFile", "FileName", "FileAccessDate", "DateTimeOriginal",
           "GPSDateTime", "GPSLatitude", "GPSLongitude", "GPSAltitude"#, "GPSSatellites"
           )
 
-original_exif <- read_exif("//nmfs/akc-nmml/Polar_Imagery/Surveys_HS/Coastal/Originals/test_exif.jpg", tags = tags)
+original_exif <- read_exif(paste0(wd, "/test_exif.jpg"), tags = tags)
 #original_exif$ISO <- as.character(original_exif$ISO)
 original_exif <- data.frame(SourceFile = original_exif[0, c(1:2)], stringsAsFactors = FALSE)
 
@@ -97,13 +100,15 @@ for (i in c(1:nrow(original))){
   original_exif <- subset(original_exif, grepl("[A-z][A-z][A-z]_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]", original_exif$photog_track_id))
   
   # Assign unique ID to each record
-  con <- RPostgreSQL::dbConnect(PostgreSQL(), 
-                                dbname = Sys.getenv("pep_db"), 
-                                host = Sys.getenv("pep_ip"), 
-                                user = Sys.getenv("pep_admin"), 
-                                password = Sys.getenv("admin_pw"))
+  con <- DBI::dbConnect(
+    RPostgres::Postgres(),
+    dbname = Sys.getenv("mml_pep_db"),
+    host = Sys.getenv("mml_pep_ip"),
+    user = Sys.getenv("mml_pep_user"),
+    password = Sys.getenv("mml_pep_user_pw")
+  )
   
-  next_id <- as.integer(dbGetQuery(con, "SELECT max(id) FROM surv_pv_cst.tbl_image_exif"))
+  next_id <- as.integer(RPostgres::dbGetQuery(con, "SELECT max(id) FROM surv_pv_cst.tbl_image_exif"))
   row.names(original_exif) <- 1:nrow(original_exif) 
   original_exif$id <- as.integer(row.names(original_exif)) + as.integer(next_id)
   original_exif$GPSSatellites <- ''
@@ -112,10 +117,11 @@ for (i in c(1:nrow(original))){
   original_exif <- original_exif[, c("id", "SourceFile", "FileAccessDate", "image_name", "photog_track_id", "DateTimeOriginal", 
                                      "Make", "Model", "Lens", "ExposureTime", "FNumber", "FocalLength", "ISO", "Quality", "WhiteBalance", "Sharpness", "FocusMode", "ExifImageWidth", "ExifImageHeight",
                                      "GPSDateTime", "GPSLatitude", "GPSLongitude", "GPSAltitude", "GPSSatellites")]
+  original_exif$SourceFile <- stringr::str_remove(original_exif$SourceFile[i][1], "^.*(?=survey_harbor_seals_coastal)")
   original_exif[original_exif == ""] <- NA 
   substr(original_exif$FileAccessDate, 5, 5) <- "-"
   substr(original_exif$FileAccessDate, 8, 8) <- "-"
-  original_exif$FileAccessDate <- ymd_hms(original_exif$FileAccessDate, tz = "America/Vancouver")
+  original_exif$FileAccessDate <- ymd_hms(original_exif$FileAccessDate, tz = "America/Los Angeles")
   original_exif$DateTimeOriginal <- ifelse(original_exif$DateTimeOriginal == "                   ", NA, original_exif$DateTimeOriginal)
   original_exif$DateTimeOriginal <- ifelse(substr(original_exif$DateTimeOriginal, 8, 8) == ":", 
                                            original_exif$DateTimeOriginal, 
@@ -169,20 +175,23 @@ for (i in c(1:nrow(original))){
                                "lens_specs", "exposure_time_sec", "f_stop", "focal_length", "iso", "quality", "white_balance", "sharpness", "focus_mode",
                                "image_width_pix", "image_height_pix", "gps_dt", "latitude", "longitude", "altitude", "gps_satellites", 
                                "interpolated_lku", "use_for_count_lku", "geom", "polyid")
-  dbWriteTable(con, c("surv_pv_cst", "tbl_image_exif"), original_exif, append = TRUE, row.names = FALSE)
-  RPostgreSQL::dbDisconnect(con)
+  target_table <- Id(schema = "surv_pv_cst", table = "tbl_image_exif")
+  RPostgres::dbWriteTable(con, target_table, original_exif, overwrite = FALSE, append = TRUE)
+  RPostgres::dbDisconnect(con)
 }
 
-con <- RPostgreSQL::dbConnect(PostgreSQL(), 
-                              dbname = Sys.getenv("pep_db"), 
-                              host = Sys.getenv("pep_ip"), 
-                              user = Sys.getenv("pep_admin"), 
-                              password = Sys.getenv("admin_pw"))
+con <- DBI::dbConnect(
+  RPostgres::Postgres(),
+  dbname = Sys.getenv("mml_pep_db"),
+  host = Sys.getenv("mml_pep_ip"),
+  user = Sys.getenv("mml_pep_user"),
+  password = Sys.getenv("mml_pep_user_pw")
+)
 
-dbSendQuery(con, "UPDATE surv_pv_cst.tbl_image_exif SET geom = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)")
-dbSendQuery(con, "UPDATE surv_pv_cst.tbl_image_exif SET polyid = NULL WHERE polyid = \'\'")
-dbSendQuery(con, "UPDATE surv_pv_cst.tbl_image_exif SET photog_date_id = substr(image_name, 1, 13) WHERE substr(image_name, 13, 1) <> '_'")
+RPostgres::dbSendQuery(con, "UPDATE surv_pv_cst.tbl_image_exif SET geom = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)")
+RPostgres::dbSendQuery(con, "UPDATE surv_pv_cst.tbl_image_exif SET polyid = NULL WHERE polyid = \'\'")
+RPostgres::dbSendQuery(con, "UPDATE surv_pv_cst.tbl_image_exif SET photog_date_id = substr(image_name, 1, 13) WHERE substr(image_name, 13, 1) <> '_'")
 
 # Disconnect for database and delete unnecessary variables ----------------------------
-RPostgreSQL::dbDisconnect(con)
+RPostgres::dbDisconnect(con)
 rm(con, dir, i, wd, year, yr, next_id)
